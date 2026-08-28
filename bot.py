@@ -114,5 +114,7 @@ async def penalti(ctx):
     secilen_sonuc = random.choice(sonuclar)
     await ctx.send(f"👟 **{ctx.author.display_name}** penaltı noktasında... Vuruşunu yapıyor...\n\n{secilen_sonuc}")
 
+import os
 
-bot.run('token')
+# Kodunun en sonundaki bot çalıştırma satırını böyle yap:
+bot.run(os.environ.get("TOKEN"))
