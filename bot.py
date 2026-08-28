@@ -3,6 +3,7 @@ from discord.ext import commands
 import random
 import json
 import os
+import re
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -34,6 +35,61 @@ def oyuncu_getir(user_id):
         veri_kaydet(veri)
     return veri, user_str
 
+
+# --- NICKNAME İÇİNDEKİ M€ DEĞERİNİ YÖNETEN YARDIMCI FONKSİYONLAR ---
+# Nickname formatı örneği: "İsim | 🇹🇷 | 1M€"  ->  sondaki "1M€" kısmını yakalar
+DEGER_REGEX = re.compile(r'(\d+(?:[.,]\d+)?)\s*M€', re.IGNORECASE)
+
+
+def nickte_deger_bul(nick: str):
+    """Nickname içindeki M€ değerini bulur. Bulamazsa None döner."""
+    if not nick:
+        return None
+    eslesme = DEGER_REGEX.search(nick)
+    if not eslesme:
+        return None
+    sayi_str = eslesme.group(1).replace(',', '.')
+    try:
+        return float(sayi_str)
+    except ValueError:
+        return None
+
+
+def nickte_deger_guncelle(nick: str, yeni_deger: float) -> str:
+    """Nickname içindeki M€ değerini yeni_deger ile değiştirip yeni nickname'i döner."""
+    if yeni_deger == int(yeni_deger):
+        yeni_deger_str = str(int(yeni_deger))
+    else:
+        yeni_deger_str = str(yeni_deger)
+    return DEGER_REGEX.sub(f"{yeni_deger_str}M€", nick, count=1)
+
+
+async def uyenin_degerini_degistir(member: discord.Member, miktar: float):
+    """
+    Üyenin nickname'indeki M€ değerini miktar kadar değiştirir (miktar negatif olabilir).
+    Dönüş:
+      - yeni_deger (float)  -> başarılı
+      - None                -> nickname'de M€ formatı bulunamadı
+      - "forbidden"         -> botun bu kullanıcının nickname'ini değiştirme izni yok
+    """
+    mevcut_nick = member.display_name
+    mevcut_deger = nickte_deger_bul(mevcut_nick)
+    if mevcut_deger is None:
+        return None
+
+    yeni_deger = mevcut_deger + miktar
+    if yeni_deger < 0:
+        yeni_deger = 0
+
+    yeni_nick = nickte_deger_guncelle(mevcut_nick, yeni_deger)
+
+    try:
+        await member.edit(nick=yeni_nick)
+        return yeni_deger
+    except discord.Forbidden:
+        return "forbidden"
+
+
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} olarak futbol sunucusuna giriş yapıldı! Bot hazır, aga.')
@@ -50,6 +106,7 @@ async def ant(ctx):
         if veri[user_str]["ant"] == 10:
             veri[user_str]["para"] += 3
             veri_kaydet(veri)
+            await uyenin_degerini_degistir(ctx.author, 3)
             await ctx.send(f"⚽ **{ctx.author.display_name}** Normal Antrenmanı tamamladı! **(10/10)**\n🎉 **+3 M€** kazandın! Güncel Piyasa Değerin: **{veri[user_str]['para']} M€**")
         else:
             veri_kaydet(veri)
@@ -76,6 +133,7 @@ async def altinant(ctx):
         if veri[user_str]["altin_ant"] == 10:
             veri[user_str]["para"] += 5
             veri_kaydet(veri)
+            await uyenin_degerini_degistir(ctx.author, 5)
             await ctx.send(f"🌟 **{ctx.author.display_name}** ALTIN ANTRENMANI tamamladı! **(10/10)**\n🔥 **+5 M€** kazandın! Güncel Piyasa Değerin: **{veri[user_str]['para']} M€**")
         else:
             veri_kaydet(veri)
@@ -112,9 +170,49 @@ async def penalti(ctx):
         "💨 **DIŞARI!** Top farklı şekilde avuta çıktı!"
     ]
     secilen_sonuc = random.choice(sonuclar)
+
+    # Eğer sonuç GOL ise, kullanıcının değerine 3 M€ ekle (hem JSON'a hem nickname'e)
+    if "GOL" in secilen_sonuc:
+        veri, user_str = oyuncu_getir(ctx.author.id)
+        veri[user_str]["para"] += 3
+        veri_kaydet(veri)
+        await uyenin_degerini_degistir(ctx.author, 3)
+        secilen_sonuc += f"\n💰 Penaltı golü! **+3 M€** kazandın!"
+
     await ctx.send(f"👟 **{ctx.author.display_name}** penaltı noktasında... Vuruşunu yapıyor...\n\n{secilen_sonuc}")
 
-import os
 
-# Kodunun en sonundaki bot çalıştırma satırını böyle yap:
+# --- 5. NICKNAME ÜZERİNDEN DEĞER EKLEME / SİLME KOMUTLARI ---
+@bot.command(name='değerekle', aliases=['degerekle'])
+async def deger_ekle(ctx, miktar: float, member: discord.Member = None):
+    hedef = member or ctx.author
+    sonuc = await uyenin_degerini_degistir(hedef, miktar)
+
+    if sonuc is None:
+        await ctx.send(f"⚠️ **{hedef.display_name}** adında `SayıM€` formatında bir değer bulunamadı (örn: `1M€`).")
+    elif sonuc == "forbidden":
+        await ctx.send("⚠️ Bu kullanıcının nickname'ini değiştirme yetkim yok (rol sıralaması ya da izin sorunu).")
+    else:
+        veri, user_str = oyuncu_getir(hedef.id)
+        veri[user_str]["para"] = sonuc
+        veri_kaydet(veri)
+        await ctx.send(f"✅ **{hedef.display_name}** değerine **{miktar} M€** eklendi! Güncel Değer: **{sonuc} M€**")
+
+
+@bot.command(name='değersil', aliases=['degersil'])
+async def deger_sil(ctx, miktar: float, member: discord.Member = None):
+    hedef = member or ctx.author
+    sonuc = await uyenin_degerini_degistir(hedef, -miktar)
+
+    if sonuc is None:
+        await ctx.send(f"⚠️ **{hedef.display_name}** adında `SayıM€` formatında bir değer bulunamadı (örn: `1M€`).")
+    elif sonuc == "forbidden":
+        await ctx.send("⚠️ Bu kullanıcının nickname'ini değiştirme yetkim yok (rol sıralaması ya da izin sorunu).")
+    else:
+        veri, user_str = oyuncu_getir(hedef.id)
+        veri[user_str]["para"] = sonuc
+        veri_kaydet(veri)
+        await ctx.send(f"✅ **{hedef.display_name}** değerinden **{miktar} M€** silindi! Güncel Değer: **{sonuc} M€**")
+
+
 bot.run(os.environ.get("TOKEN"))
