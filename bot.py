@@ -90,9 +90,52 @@ async def uyenin_degerini_degistir(member: discord.Member, miktar: float):
         return "forbidden"
 
 
+# --- AFK SİSTEMİ (JSON) ---
+AFK_FILE = 'afk.json'
+
+def afk_yukle():
+    if os.path.exists(AFK_FILE):
+        with open(AFK_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def afk_kaydet(veri):
+    with open(AFK_FILE, 'w', encoding='utf-8') as f:
+        json.dump(veri, f, ensure_ascii=False, indent=4)
+
+
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} olarak futbol sunucusuna giriş yapıldı! Bot hazır, aga.')
+
+
+@bot.event
+async def on_message(message):
+    # Botların kendi mesajlarını sayma / işleme
+    if message.author.bot:
+        return
+
+    # --- Mesaj sayacını artır ---
+    veri, user_str = oyuncu_getir(message.author.id)
+    veri[user_str]["mesaj"] = veri[user_str].get("mesaj", 0) + 1
+    veri_kaydet(veri)
+
+    # --- Mesaj atan kişi AFK ise, AFK durumunu kaldır ---
+    afk_verisi = afk_yukle()
+    yazan_str = str(message.author.id)
+    if yazan_str in afk_verisi:
+        del afk_verisi[yazan_str]
+        afk_kaydet(afk_verisi)
+        await message.channel.send(f"👋 **{message.author.display_name}**, tekrar hoş geldin! AFK durumun kaldırıldı.")
+
+    # --- Mesajda etiketlenen kullanıcılar AFK ise haber ver ---
+    for uye in message.mentions:
+        uye_str = str(uye.id)
+        if uye_str in afk_verisi:
+            await message.channel.send(f"💤 **{uye.display_name}** şu an AFK: **{afk_verisi[uye_str]}**")
+
+    # Komutların çalışmaya devam etmesi için şart
+    await bot.process_commands(message)
 
 # --- 1. NORMAL ANTRENMAN KOMUTLARI ---
 @bot.command()
@@ -213,6 +256,24 @@ async def deger_sil(ctx, miktar: float, member: discord.Member = None):
         veri[user_str]["para"] = sonuc
         veri_kaydet(veri)
         await ctx.send(f"✅ **{hedef.display_name}** değerinden **{miktar} M€** silindi! Güncel Değer: **{sonuc} M€**")
+
+
+# --- 6. AFK KOMUTU ---
+@bot.command()
+async def afk(ctx, *, sebep="Belirtilmedi"):
+    afk_verisi = afk_yukle()
+    afk_verisi[str(ctx.author.id)] = sebep
+    afk_kaydet(afk_verisi)
+    await ctx.send(f"💤 **{ctx.author.display_name}** artık AFK: **{sebep}**")
+
+
+# --- 7. MESAJ SAYISI KOMUTU ---
+@bot.command(name='mesaj')
+async def mesaj_sayisi(ctx, member: discord.Member = None):
+    hedef = member or ctx.author
+    veri, user_str = oyuncu_getir(hedef.id)
+    sayi = veri[user_str].get("mesaj", 0)
+    await ctx.send(f"💬 **{hedef.display_name}** toplam **{sayi}** mesaj attı.")
 
 
 bot.run(os.environ.get("TOKEN"))
